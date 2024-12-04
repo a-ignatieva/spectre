@@ -2,16 +2,21 @@
 Citation: Ignatieva, A., and Ferreira, L.A.F. Phantom epistasis through the lens of genealogies. bioRxiv, doi.org/
 
 To run the script, first install the necessary packages
-    `pip install -r requirements.txt`
-Then run
-    `python -m spectre -f <directory> -A <chr_of_SNP1> -a <pos_of_SNP1> -B <chr_of_SNP2> -b <pos_of_SNP2>`
-or run
-    `python -m spectre -h`
+
+    pip install -r requirements.txt
+    
+You can run the example code (using the provided ARG for 10Mb of human chr20 simulated using stdpopsim and reconstructed using Relate):
+
+    python -m spectre -f example -A 20 -a 15489683 -B 20 -b 15620278
+    
+Or run
+
+    python -m spectre -h
+    
 to see the full list of options.
-The example code can be run using the provided ARG (10Mb of human chr20 simulated using stdpopsim and reconstructed using Relate):
-    `python -m spectre -f example -A 20 -a 15489683 -B 20 -b 15620278`
 
 The script produces a plot of the results and a output file with the following entries:
+
     b: (Input parameter) Estimate of true effect size of the unobserved causal variant
     h2: (Input parameter) Estimate of trait heritability
     alpha: (Input parameter) Significance threshold used in interaction testing
