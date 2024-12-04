@@ -1,0 +1,5 @@
+stdpopsim >= 0.2.0
+tszip >= 0.2.2
+scipy >= 1.11.2
+tqdm >= 4.66.1
+matplotlib >= 3.7.2
