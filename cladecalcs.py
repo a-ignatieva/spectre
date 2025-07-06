@@ -7,6 +7,9 @@ import gzip
 import tqdm
 import tskit
 import tszip
+from scipy.stats import norm
+from scipy.optimize import brentq
+import statsmodels.api as sm
 
 class Clades:
     """
@@ -139,8 +142,6 @@ def clade_span(ts_list, num_trees, num_samples, write_to_file=None, write_to_fil
     """
     Compute the span of clades in a given tree sequence.
     This is defined by the samples subtending a clade staying the same.
-    This WILL NOT calculate the clade disruption probabilities (that way those can be done in parallel,
-    and only for the relevant clades)
     :param ts_list: list of tskit tree sequence file handles with extensions (will be loaded as we go)
     :param num_trees: total number of trees in full ts (excluding the empty trees)
     :param num_samples: number of samples in each ts
@@ -344,74 +345,176 @@ def R2(set1, set2, NN):
     s2 = len(set2)
     return (s*NN - s1*s2)**2 / (s1*s2*(NN-s1)*(NN-s2))
 
-def check_conditions(f, S, A, M1, M2, LHS, RHS, N):
+
+def solve_for_b(P, C, beta_partial):
     """
-    Check whether A provides evidence against existence of a clade Z such that
-    signiicance inequality is satisfied
-    :param f: frequencies of M1, M2, S
-    :param S: samples in S
-    :param A: samples in A
-    :param M1: samples carrying SNP1
-    :param M2: samples carrying SNP2
-    :param LHS: pre-computed LHS coefficients
-    :param RHS: pre-computed RHS
-    :param N: total sample size
-    :return:
+    Numerically solves for the effect size b from equation (S9).
+    :param P: probability P
+    :param C: significance threshold from the original test (e.g., 1.96 for alpha=0.05)
+    :param beta_partial: estimated partial regression coefficient (beta_{z,s|x})
     """
-    fx1, fx2, fs = f
-    fa = len(A)/N
-    fx1a = len(A & M1)/N
-    fx2a = len(A & M2)/N
-    fu = len(A & S)/N
-    fw = fs - fu
 
-    # Case 1
-    Ex1z = fu * (1 - fx1)
-    Ex2z = fu * (1 - fx2)
-    Esz = fu * (1 - fs)
-    check1 = Ex1z * LHS[0] + Ex2z * LHS[1] + Esz * LHS[2] < RHS
-    if not check1:
-        return False
+    def equation_to_solve(b_abs):
+        # We assume b_abs is positive and use beta_partial's sign
+        # to determine the direction of the effect.
+        term = b_abs * beta_partial
+        calculated_prob = (norm.cdf(-C + term) + (1 - norm.cdf(C + term)))
+        return calculated_prob - P
 
-    # Case 2
-    Ex1z = fw * (1 - fx1)
-    Ex2z = fw * (1 - fx2)
-    Esz = fw * (1 - fs)
-    check2 = Ex1z * LHS[0] + Ex2z * LHS[1] + Esz * LHS[2] < RHS
-    if not check2:
-        return False
+    try:
+        # Use a numerical solver (Brent's method) to find the root.
+        # We search for a solution for b in the interval [0, 5].
+        # The solver will find the positive root for b.
+        solution_b = brentq(equation_to_solve, a=0, b=5)
+        return solution_b
+    except ValueError:
+        return np.nan
 
-    # Case 3
-    Ex1z = fx1a + fw - fx1 * (fa + fw)
-    Ex2z = fx2a + fw - fx2 * (fa + fw)
-    Esz = fs * (1 - fa - fw)
-    check3 = Ex1z * LHS[0] + Ex2z * LHS[1] + Esz * LHS[2] < RHS
-    if not check3:
-        return False
 
-    # Case 4
-    Ex1z = fx1a - fu - fx1 * (fa - fu)
-    Ex2z = fx2a - fu - fx2 * (fa - fu)
-    Esz = - fs * (fa - fu)
-    check4 = Ex1z * LHS[0] + Ex2z * LHS[1] + Esz * LHS[2] < RHS
-    if not check4:
-        return False
+def set_to_vector(A, n_total_samples):
+    """
+    Converts set of sample indices into binary genotype vectors.
+    """
+    A_vec = np.zeros(n_total_samples)
+    A_vec[list(A)] = 1
 
-    # Case 5
-    Ex1z = fx1 - fx1a - fw - fx1 * (1 - fa - fw)
-    Ex2z = fx2 - fx2a - fw - fx2 * (1 - fa - fw)
-    Esz = -fs * (1 - fa - fw)
-    check5 = Ex1z * LHS[0] + Ex2z * LHS[1] + Esz * LHS[2] < RHS
-    if not check5:
-        return False
+    return A_vec
 
-    # Case 6
-    Ex1z = - fw * (1 - fx1)
-    Ex2z = - fw * (1 - fx2)
-    Esz = fu - fs * (1 - fw)
-    check6 = Ex1z * LHS[0] + Ex2z * LHS[1] + Esz * LHS[2] < RHS
 
-    return check1 and check2 and check3 and check4 and check5 and check6
+def sets_to_vectors(Z, S, X1, X2, n_total_samples):
+    """
+    Converts sets of sample indices into binary genotype vectors.
+    """
+    z_vec = set_to_vector(Z, n_total_samples)
+    s_vec = set_to_vector(S, n_total_samples)
+    x1_vec = set_to_vector(X1, n_total_samples)
+    x2_vec = set_to_vector(X2, n_total_samples)
+
+    return z_vec, s_vec, x1_vec, x2_vec
+
+
+def standardize(variable):
+    """Converts a variable to have a mean of 0 and a standard deviation of 1."""
+    return (variable - np.mean(variable)) / np.std(variable, ddof=1)
+
+
+def estimate_beta_partial(z, s, x1, x2):
+    """
+    Estimates the standardized partial regression coefficient of s on z,
+    conditional on x1 and x2.
+    """
+    z_std, s_std, x1_std, x2_std = map(standardize, [z, s, x1, x2])
+    X = np.column_stack((x1_std, x2_std, s_std))
+    model = sm.OLS(z_std, X)
+    results = model.fit()
+    # The coefficient for 's' is the last one in the parameter list
+    beta_hat = results.params[-1]
+    return beta_hat
+
+
+# def check_conditions(S, A, notA, M1, M2, N, P, C):
+#     """
+#     Check whether A provides evidence against existence of a clade Z such that
+#     significance inequality is satisfied
+#     :param S: samples in S
+#     :param A: samples in A
+#     :param M1: samples carrying SNP1
+#     :param M2: samples carrying SNP2
+#     :param N: total sample size
+#     :return:
+#     """
+#     S_vec, A_vec, M1_vec, M2_vec = sets_to_vectors(S, A, M1, M2, N)
+#
+#     Z1 = A & S
+#     Z2 = notA & S
+#     Z3 = A | S
+#     Z4 = A - S
+#     Z5 = notA - S
+#     Z6 = A & Z5
+#
+#     b_min = math.inf
+#
+#     for Z in [Z1, Z2, Z3, Z4, Z5, Z6]:
+#         Z_vec = set_to_vector(Z, N)
+#         beta = estimate_beta_partial(Z_vec, S_vec, M1_vec, M2_vec)
+#         b = solve_for_b(P, C, beta)
+#         if b < b_min:
+#             b_min = b
+#
+#     return b_min
+
+
+def check_conditions_fast(Y, notY, X, N, P, C, pseudo_inverse):
+    """
+    A much faster version of check_conditions that uses a pre-calculated
+    pseudo-inverse of the design matrix to avoid repeated regressions.
+
+    Args:
+        Y (set): The set of samples for the clade.
+        X (set): The set of samples for the target (e.g. S, K1, K2, O).
+        N (int): Total sample size.
+        P (float): Target probability for solve_for_b.
+        C (float): Significance threshold for solve_for_b.
+        pseudo_inverse (np.array): The pre-calculated pseudo-inverse of the standardized design matrix.
+
+    Returns:
+        float: The minimum 'b' value.
+    """
+    # Define the 6 Z sets based on the clade (Y) and the target (X)
+    Z_sets = [
+        Y & X,
+        notY & X,
+        Y | X,
+        Y - X,
+        notY - X,
+        Y | (notY - X),
+    ]
+
+    b_min = np.inf
+
+    # Convert all 6 Z sets to standardized vectors
+    z_vectors_std = [standardize(set_to_vector(z_set, N)) for z_set in Z_sets]
+
+    for z_std in z_vectors_std:
+        beta_coeffs = pseudo_inverse @ z_std
+        beta_partial = beta_coeffs[-1]
+        b = solve_for_b(P, C, beta_partial)
+        if b < b_min:
+            b_min = b
+
+    return b_min
+
+
+# def calculate_all_bmins_for_clade(Y, M1, M2, S, K1, K2, O, N, P, C):
+#     """
+#     Calculates the minimum effect size 'b' for a given clade Y across all
+#     four target sets (S, K1, K2, O).
+#
+#     This function consolidates the loops to be more efficient.
+#
+#     Returns:
+#         list: A list of four 'b_min' values, one for each target set.
+#     """
+#
+#     M1n = {s for s in range(N) if s not in M1}
+#     M2n = {s for s in range(N) if s not in M2}
+#     notY = {s for s in range(N) if (s not in Y)}
+#
+#     target_sets = [
+#         (S, M1, M2),  # Target S uses main effects M1, M2
+#         (K1, M1, M2n),  # Target K1 uses M1, not M2
+#         (K2, M1n, M2),  # Target K2 uses not M1, M2
+#         (O, M1n, M2n)  # Target O uses not M1, not M2
+#     ]
+#
+#     bmins = [np.inf] * 4
+#
+#     for i, (X, MM1, MM2) in enumerate(target_sets):
+#         bmin = check_conditions(X, Y, notY, MM1, MM2, N, P, C)
+#         bmins[i] = bmin
+#
+#     return bmins
+
 
 def get_searchrange(pos, rec_map, d=1.0):
     """
@@ -442,20 +545,3 @@ def get_searchrange(pos, rec_map, d=1.0):
     # print(S[1], pos - S[1], (P - rec_map.get_cumulative_mass(S[1]))*100)
     return int(S[0]), int(S[1])
 
-def check_significance(f, M1, M2, S, Z, N, LHS):
-    """
-    Significance inequality (S4)
-    :param f: frequencies of M1, M2, S
-    :param M1: set of carriers of SNP1
-    :param M2: set of carriers of SNP2
-    :param S: target set
-    :param Z: clade in ARG
-    :param N: ARG sample size
-    :param LHS: coefficients of E(x1z), E(x2z), E(sz)
-    :return:
-    """
-    fz = len(Z)/N
-    Ex1z = len(M1 & Z)/N - f[0] * fz
-    Ex2z = len(M2 & Z)/N - f[1] * fz
-    Esz = len(S & Z)/N - f[2] * fz
-    return Ex1z * LHS[0] + Ex2z * LHS[1] + Esz * LHS[2]

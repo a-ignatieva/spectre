@@ -28,11 +28,11 @@ def main(argv):
     path = ""
     chrA = posA = chrB = posB = None
     chrC = posC = -1
-    h2_est = b_est = alpha = n_reg = RHS = None
+    alpha = n_reg = RHS = teststat = None
     plot_on = True
     try:
         opts, args = getopt.getopt(argv,
-                                   "hf:A:a:B:b:CcHETNp",
+                                   "hf:A:a:B:b:CcTSNp",
                                    [
                                        "filepath=",
                                        "chrSNP1=",
@@ -41,9 +41,8 @@ def main(argv):
                                        "posSNP2=",
                                        "chrSNP3=",
                                        "posSNP3=",
-                                       "h2=",
-                                       "b=",
                                        "alpha=",
+                                       "teststatistic=",
                                        "N=",
                                        "plot=",
                                    ]
@@ -68,9 +67,8 @@ def main(argv):
             print("-b", "--posSNP2", ": Position of SNP2 (int)")
             print("-C", "--chrSNP3", ": Chromosome of SNP3 (int), optional")
             print("-c", "--posSNP3", ": Position of SNP3 (int), optional")
-            print("-H", "--h2", ": Estimate of trait heritability, optional")
-            print("-E", "--b", ": Estimate of true effect size, optional")
             print("-T", "--alpha", ": Significance threshold for interaction test, optional")
+            print("-S", "--teststatistic", ": Test statistic for interaction test, optional")
             print("-N", "--N", ": Total sample size for interaction test, optional")
             print("-p", "--plot", ": Whether to create plot of results, optional")
             print("-"*100)
@@ -89,12 +87,10 @@ def main(argv):
             chrC = int(arg)
         elif opt in ("-c", "--posSNP3"):
             posC = int(arg)
-        elif opt in ("-H", "--h2"):
-            h2_est = int(arg)
-        elif opt in ("-E", "--b"):
-            b_est = int(arg)
         elif opt in ("-T", "--alpha"):
             alpha = int(arg)
+        elif opt in ("-S", "--teststatistic"):
+            teststat = float(arg)
         elif opt in ("-N", "--N"):
             n_reg = int(arg)
         elif opt in ("-p", "--plot"):
@@ -104,10 +100,12 @@ def main(argv):
         print ("For usage: python -m run -h")
         sys.exit(2)
 
-    if h2_est is not None and alpha is not None and b_est is not None and n_reg is not None:
-        sigdsq = 1 - h2_est
-        C = scipy.stats.norm.ppf(1 - alpha / 2)
-        RHS = C / b_est * np.sqrt(sigdsq / n_reg)
+    if alpha is None:
+        alpha = 0.05
+    if n_reg is None:
+        n_reg = 1
+    P = 0.5
+    C = scipy.stats.norm.ppf(1 - alpha / 2)
 
     d = 1.0  # cM to search around each SNP
     labels = {0: "S", 1: "K1", 2: "K2", 3: "O"}
@@ -122,10 +120,9 @@ def main(argv):
     print("SNP1:", chrA, posA)
     print("SNP2:", chrB, posB)
     print("SNP3:", chrC, posC)
-    print("h^2 estimate:", h2_est)
-    print("b estimate:", b_est)
     print("n:", n_reg)
     print("alpha:", alpha)
+    print("test statistic:", teststat)
     print("=" * 100)
 
     # ===========================================================================================
@@ -291,29 +288,29 @@ def main(argv):
     for j, f in enumerate([fS, fK1, fK2, fO]):
         print("Frequency of " + labels[j] + ":", round(f[2], 2))
 
-    LHSs = [None] * 4
-    for i, f in enumerate([fS, fK1, fK2, fO]):
-        sig_11 = f[0] * (1 - f[0])
-        sig_22 = f[1] * (1 - f[1])
-        sig_ss = f[2] * (1 - f[2])
-        sig_1s = f[2] * (1 - f[0])
-        sig_2s = f[2] * (1 - f[1])
-        sig_12 = f[2] - f[0] * f[1]
-        LHS1 = sig_12 * sig_2s - sig_22 * sig_1s  # coefficient of E(x1z)
-        LHS2 = sig_12 * sig_1s - sig_11 * sig_2s  # coefficient of E(x2z)
-        LHS3 = sig_11 * sig_22 - sig_12**2  # coefficient of E(sz)
-        det = (
-                sig_11 * sig_22 * sig_ss
-                + 2 * sig_12 * sig_2s * sig_1s
-                - sig_1s**2 * sig_22
-                - sig_12**2 * sig_ss
-                - sig_11 * sig_2s**2
-        )
-        if i==0:
-            print("det(T):", round(det, 6))
-        factor = np.sqrt(det * (sig_11 * sig_22 - sig_12**2))
-        LHSs[i] = (LHS1/factor, LHS2/factor, LHS3/factor)
-        print("V_1, V_2, V_3 for target set " + labels[i] + ":", [round(v, 2) for v in LHSs[i]])
+    # LHSs = [None] * 4
+    # for i, f in enumerate([fS, fK1, fK2, fO]):
+    #     sig_11 = f[0] * (1 - f[0])
+    #     sig_22 = f[1] * (1 - f[1])
+    #     sig_ss = f[2] * (1 - f[2])
+    #     sig_1s = f[2] * (1 - f[0])
+    #     sig_2s = f[2] * (1 - f[1])
+    #     sig_12 = f[2] - f[0] * f[1]
+    #     LHS1 = sig_12 * sig_2s - sig_22 * sig_1s  # coefficient of E(x1z)
+    #     LHS2 = sig_12 * sig_1s - sig_11 * sig_2s  # coefficient of E(x2z)
+    #     LHS3 = sig_11 * sig_22 - sig_12**2  # coefficient of E(sz)
+    #     det = (
+    #             sig_11 * sig_22 * sig_ss
+    #             + 2 * sig_12 * sig_2s * sig_1s
+    #             - sig_1s**2 * sig_22
+    #             - sig_12**2 * sig_ss
+    #             - sig_11 * sig_2s**2
+    #     )
+    #     if i==0:
+    #         print("det(T):", round(det, 6))
+    #     factor = np.sqrt(det * (sig_11 * sig_22 - sig_12**2))
+    #     LHSs[i] = (LHS1/factor, LHS2/factor, LHS3/factor)
+    #     print("V_1, V_2, V_3 for target set " + labels[i] + ":", [round(v, 2) for v in LHSs[i]])
 
     if len(M1) + len(M2) - len(S) + len(O) != N:
         sys.exit("Wrong clade sizes.")
@@ -328,26 +325,6 @@ def main(argv):
         ]
         print(r2_M3_target_sets)
 
-    print("-"*100)
-    maxFM3 = None
-    if RHS is not None:
-        print("RHS from input parameters:", round(RHS, 2))
-    if len(M3) > 0:
-        FM31 = cladecalcs.check_significance(fS, M1, M2, S, M3, N, LHSs[0])
-        FM32 = cladecalcs.check_significance(fK1, M1, M2n, K1, M3, N, LHSs[1])
-        FM33 = cladecalcs.check_significance(fK2, M1n, M2, K2, M3, N, LHSs[2])
-        FM34 = cladecalcs.check_significance(fO, M1n, M2n, O, M3, N, LHSs[3])
-        maxFM3 = max(FM31, FM32, FM33, FM34)
-        print("RHS from known SNP3:",  maxFM3)
-    print("RHS from SNP1 (should be ~0):", round(cladecalcs.check_significance(fS, M1, M2, S, M1, N, LHSs[0]), 2))
-    print("RHS from SNP2 (should be ~0):", round(cladecalcs.check_significance(fS, M1, M2, S, M2, N, LHSs[0]), 2))
-    FS = cladecalcs.check_significance(fS, M1, M2, S, S, N, LHSs[0])
-    FK1 = cladecalcs.check_significance(fK1, M1, M2n, K1, K1, N, LHSs[1])
-    FK2 = cladecalcs.check_significance(fK2, M1n, M2, K2, K2, N, LHSs[2])
-    FO = cladecalcs.check_significance(fO, M1n, M2n, O, O, N, LHSs[3])
-    print("RHS from interaction:", round(FS, 2))
-    RHS = FS * 0.8
-    print("Updating RHS to", round(RHS, 2))
     print("-"*100)
 
     # ===========================================================================================
@@ -389,9 +366,8 @@ def main(argv):
 
     print("Setting up...")
     if chrA == chrB:
-        resultsA = np.zeros((4, clades1.num), dtype=int)
-        xxA = np.zeros((4, searchrangeA[1] - searchrangeA[0] + 1), dtype=int)
-        L = [(ts1, clades1, resultsA, xxA, chrA, posA, searchrangeA)]
+        xxA = np.full((4, searchrangeA[1] - searchrangeA[0] + 1), np.inf)
+        L = [(ts1, clades1, xxA, chrA, posA, searchrangeA)]
         dist_bp = posB - posA
         if posA > rec_mapA.sequence_length or posB > rec_mapA.sequence_length:
             dist_cM = "NA"
@@ -400,36 +376,33 @@ def main(argv):
                 (rec_mapA.get_cumulative_mass(posB) - rec_mapA.get_cumulative_mass(posA)) * 100
             )
     else:
-        resultsA = np.zeros((4, clades1.num), dtype=int)
-        resultsB = np.zeros((4, clades2.num), dtype=int)
-        xxA = np.zeros((4, searchrangeA[1] - searchrangeA[0] + 1), dtype=int)
-        xxB = np.zeros((4, searchrangeB[1] - searchrangeB[0] + 1), dtype=int)
+        xxA = np.full((4, searchrangeA[1] - searchrangeA[0] + 1), np.inf)
+        xxB = np.full((4, searchrangeB[1] - searchrangeB[0] + 1), np.inf)
         L = [
-            (ts1, clades1, resultsA, xxA, chrA, posA, searchrangeA),
-            (ts2, clades2, resultsB, xxB, chrB, posB, searchrangeB),
+            (ts1, clades1, xxA, chrA, posA, searchrangeA),
+            (ts2, clades2, xxB, chrB, posB, searchrangeB),
         ]
         dist_bp = "NA"
         dist_cM = "NA"
 
     print("="*100)
-    mutsR = defaultdict(set)  # Significant SNPs
-    cladesR = defaultdict(set)  # Significant clades
-    R_clade_max = [0] * 4  # Highest observed LHS for each clade
-    r2_clade_max = [0] * 4  # corresponding r^2
-    R_mut_max = [0] * 4  # Highest observed LHS for each SNP
-    R_mut_max_pos = ["NA"] * 4
-    R_mut_max_chr = ["NA"] * 4
-    r2_mut_max = [0] * 4  # corresponding r^2
-    for ts, clades, results, xx, ch, pos, searchrange in L:
+    b_clade_min = [np.inf] * 4  # Lowest b for each clade
+    r2_clade_min = [0] * 4  # corresponding r^2
+    b_mut_min = [np.inf] * 4  # Lowest b for each SNP
+    b_mut_min_pos = ["NA"] * 4
+    b_mut_min_chr = ["NA"] * 4
+    r2_mut_min = [0] * 4  # corresponding r^2
+
+    for ts, clades, xx, ch, pos, searchrange in L:
         print("Search range:", searchrange, searchrange[1] - searchrange[0] + 1)
-        with tqdm.tqdm(total=clades.num, desc="Finding significant clades",
+        with tqdm.tqdm(total=clades.num, desc="Checking clades",
                        bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}') as pbar:
             for i in range(clades.num):
                 if clades.start[i] < searchrange[1] and clades.end[i] > searchrange[0]:
                     b = bin(int(clades.binid[i]))
                     Y = {j for j, digit in enumerate(reversed(b)) if digit == "1"}
+                    b_est = [0] * 4
                     r = [0] * 4
-                    R = [False] * 4
                     for j, (MM1, MM2, X, f) in enumerate(
                             [
                                 (M1, M2, S, fS),
@@ -438,69 +411,72 @@ def main(argv):
                                 (M1n, M2n, O, fO),
                             ]
                     ):
-                        LHS = LHSs[j]
+                        Y_vec, X_vec, MM1_vec, MM2_vec = cladecalcs.sets_to_vectors(Y, X, MM1, MM2, N)
+                        beta_partial = cladecalcs.estimate_beta_partial(Y_vec, X_vec, MM1_vec, MM2_vec)
+                        b_est[j] = cladecalcs.solve_for_b(P, C, beta_partial)
                         r[j] = cladecalcs.R2(X, Y, N)
-                        R[j] = cladecalcs.check_significance(f, MM1, MM2, X, Y, N, LHS)
                     for j in range(4):
-                        if R[j] >= RHS and r[j] == np.max(r):
-                            # Record to the target set that this clade is most highly correlated with
-                            cladesR[j].add(
-                                (
-                                    clades.start[i],
-                                    clades.end[i],
-                                    clades.nodeid[i],
-                                    clades.num_mutations[i],
-                                )
-                            )
-                            # Same for the SNPs
-                            mutsR[j].update(clades.mutations[i])
-                        if r[j] == np.max(r):
-                            if R[j] > R_clade_max[j]:
-                                # Just update the highest observed LHS
-                                R_clade_max[j] = R[j]
-                                r2_clade_max[j] = r[j]
-                            if R[j] > R_mut_max[j] and clades.num_mutations[i] > 0:
-                                R_mut_max[j] = R[j]
-                                R_mut_max_pos[j] = ",".join(
+                        if b_est[j] == np.min(b_est):
+                            if b_est[j] < b_clade_min[j] or (b_est[j] == b_clade_min[j] and r[j] > r2_clade_min[j]):
+                                # Just update the lowest observed b_est
+                                b_clade_min[j] = b_est[j]
+                                r2_clade_min[j] = r[j]
+                            if b_est[j] == b_clade_min[j] and r[j] > r2_clade_min[j]:
+                                r2_clade_min[j] = r[j]
+                            if (b_est[j] < b_clade_min[j] or (b_est[j] == b_clade_min[j] and r[j] > r2_clade_min[j])) and clades.num_mutations[i] > 0:
+                                b_mut_min[j] = b_est[j]
+                                b_mut_min_pos[j] = ",".join(
                                     str(int(m)) for m in clades.mutations[i]
                                 )
-                                R_mut_max_chr[j] = str(ch)
-                                r2_mut_max[j] = r[j]
+                                b_mut_min_chr[j] = str(ch)
+                                r2_mut_min[j] = r[j]
                 pbar.update(1)
 
     print("-" * 100)
-    print("Highest clade r^2 with a target set:", round(np.max(r2_clade_max), 2))
-    print("Number of clades and mutations found above threshold:")
-    for j in range(4):
-        print(labels[j], ": clades ", len(cladesR[j]), ", mutations ", len(mutsR[j]))
-    print("Highest clade LHS with a target set:", round(np.max(R_clade_max), 2))
-    print("Highest SNP r^2 with a target set:", round(np.max(r2_mut_max), 2))
-    print("Highest SNP LHS with a target set:", round(np.max(R_mut_max), 2))
+    print("Best clade r^2 with a target set:", round(np.max(r2_clade_min), 2))
+    print("Best clade minimal effect size (b):", round(np.min(b_clade_min), 2))
+    print("Best SNP r^2 with a target set:", round(np.max(r2_mut_min), 2))
+    print("Best SNP minimal effect size (b):", round(np.min(b_mut_min), 2))
 
-    for ts, clades, results, xx, ch, pos, searchrange in L:
+    pseudo_inverses = []
+    target_configs = [
+        (S, M1, M2),
+        (K1, M1, M2n),
+        (K2, M1n, M2),
+        (O, M1n, M2n)
+    ]
+
+    for X_set, MM1_set, MM2_set in target_configs:
+        s_std = cladecalcs.standardize(cladecalcs.set_to_vector(X_set, N))
+        x1_std = cladecalcs.standardize(cladecalcs.set_to_vector(MM1_set, N))
+        x2_std = cladecalcs.standardize(cladecalcs.set_to_vector(MM2_set, N))
+        design_matrix = np.column_stack((x1_std, x2_std, s_std))
+        # Compute (X^T X)^-1 X^T once for each target set so that beta_s,z|x can be quickly calculated
+        pseudo_inverses.append(np.linalg.pinv(design_matrix))
+
+    for ts, clades, xx, ch, pos, searchrange in L:
         with tqdm.tqdm(total=clades.num, desc="Finding uncovered regions",
                        bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}') as pbar:
             for i in range(clades.num):
-                if clades.start[i] < searchrange[1] and clades.end[i] > searchrange[0]:
-                    b = bin(int(clades.binid[i]))
-                    Y = {j for j, digit in enumerate(reversed(b)) if digit == "1"}
-                    for j, (MM1, MM2, X, f) in enumerate(
-                            [
-                                (M1, M2, S, fS),
-                                (M1, M2n, K1, fK1),
-                                (M1n, M2, K2, fK2),
-                                (M1n, M2n, O, fO),
-                            ]
-                    ):
-                        LHS = LHSs[j]
-                        if cladecalcs.check_conditions(f, X, Y, MM1, MM2, LHS, RHS, N):
-                            results[j][i] = 1
-                            for k in range(
-                                    int(max(searchrange[0], clades.start[i]) - searchrange[0]),
-                                    int(min(searchrange[1], clades.end[i]) - searchrange[0])
-                                    + 1,
-                            ):
-                                xx[j][k] += 1
+                if clades.start[i] < searchrange[1] and clades.end[i] > searchrange[0] and clades.cladesize[i] > 4:
+
+                    clade_binary = bin(int(clades.binid[i]))
+                    Y = {j for j, digit in enumerate(reversed(clade_binary)) if digit == "1"}
+                    notY = {s for s in range(N) if (s not in Y)}
+
+                    # Calculate the start and end indices for the update
+                    start_idx = int(max(searchrange[0], clades.start[i]) - searchrange[0])
+                    end_idx = int(min(searchrange[1], clades.end[i]) - searchrange[0]) + 1
+
+                    # Loop through the 4 target sets, using the pre-calculated matrices
+                    for j in range(4):
+                        X_set = target_configs[j][0]
+                        bmin = cladecalcs.check_conditions_fast(Y, notY, X_set, N, P, C, pseudo_inverses[j])
+
+                        # Update the results array with the vectorized operation
+                        if bmin != np.inf:
+                            xx[j, start_idx:end_idx] = np.minimum(xx[j, start_idx:end_idx], bmin)
+
                 pbar.update(1)
 
     print("="*100)
@@ -525,10 +501,9 @@ def main(argv):
     )
 
     # Get max y limit
-    # Get total bp where number of clades is 0
     ymax_ = 10
     ff_list = {}
-    for j, (_, _, _, xx, _, _, _) in enumerate(L):
+    for j, (_, _, xx, _, _, _) in enumerate(L):
         for i in range(4):
             ymax_ = max(ymax_, max(xx[i]))
             ff = len([k for k in range(len(xx[i])) if xx[i][k] == 0])
@@ -541,9 +516,8 @@ def main(argv):
         else:
             fig, axs = plt.subplots(4, 2, figsize=(9, 8), squeeze=False)
 
-    if plot_on:
-        for j, (ts, clades, results, xx, ch, pos, searchrange) in enumerate(L):
-            yy = [0, 0, 0, 0]
+        for j, (ts, clades, xx, ch, pos, searchrange) in enumerate(L):
+            yy = [0, 0, 0, 0] 
             xplot = np.array([m for m in range(searchrange[0], searchrange[1] + 1)])
 
             # plot everything
@@ -660,125 +634,125 @@ def main(argv):
             dpi=300,
             )
 
-    # ===========================================================================================
-    # Output info into .csv file
-    # ===========================================================================================
-
-    print("Writing output to file...")
-
-    if chrC == -1:
-        chrC = "NA"
-        posC = "NA"
-    coverage = ["NA", "NA"]
-    coverage_p = ["NA", "NA"]
-    for j, (ts, clades, results, xx, ch, pos, searchrange) in enumerate(L):
-        cc = 0
-        for k in range(len(xx[0])):
-            if min(xx[i][k] for i in range(4)) == 0:
-                cc += 1
-        coverage[j] = cc
-        coverage_p[j] = cc / (searchrange[1] - searchrange[0] + 1)
-
-    with open(outname + ".txt", "w") as file:
-        # for j in range(4):
-        #     file.write("r2_threshold_" + labels[j] + " " + str(r_thresh) + "\n")
-        file.write("b " + str(b_est) + "\n")
-        file.write("h2 " + str(h2_est) + "\n")
-        file.write("alpha " + str(alpha) + "\n")
-        file.write("n " + str(n_reg) + "\n")
-        file.write("F " + str(RHS) + "\n")
-        file.write("F_SNP3 " + str(maxFM3) + "\n")
-        file.write("F_interaction " + str(FS) + "\n")
-        file.write("SNP1_chr " + str(chrA) + "\n")
-        file.write("SNP1_pos " + str(posA) + "\n")
-        file.write("SNP1_freq " + str(len(M1) / N) + "\n")
-        file.write("SNP2_chr " + str(chrB) + "\n")
-        file.write("SNP2_pos " + str(posB) + "\n")
-        file.write("SNP2_freq " + str(len(M2) / N) + "\n")
-        file.write("SNP1_SNP2_dist_bp " + str(dist_bp) + "\n")
-        file.write("SNP1_SNP2_dist_cM " + str(dist_cM) + "\n")
-        file.write("SNP3_chr " + str(chrC) + "\n")
-        file.write("SNP3_pos " + str(posC) + "\n")
-        if len(M3) != 0:
-            file.write("SNP3_freq " + str(len(M3) / N) + "\n")
-        else:
-            file.write("SNP3_freq NA\n")
-        file.write("S_freq " + str(len(S) / N) + "\n")
-        file.write("K1_freq " + str(len(K1) / N) + "\n")
-        file.write("K2_freq " + str(len(K2) / N) + "\n")
-        file.write("O_freq " + str(len(O) / N) + "\n")
-        file.write("r2_M1_M2 " + str(cladecalcs.R2(M1, M2, N)) + "\n")
-        file.write("r2_S_M1 " + str(cladecalcs.R2(S, M1, N)) + "\n")
-        file.write("r2_K1_M1 " + str(cladecalcs.R2(K1, M1, N)) + "\n")
-        file.write("r2_K2_M1 " + str(cladecalcs.R2(K2, M1, N)) + "\n")
-        file.write("r2_O_M1 " + str(cladecalcs.R2(O, M1, N)) + "\n")
-        file.write("r2_S_M2 " + str(cladecalcs.R2(S, M2, N)) + "\n")
-        file.write("r2_K1_M2 " + str(cladecalcs.R2(K1, M2, N)) + "\n")
-        file.write("r2_K2_M2 " + str(cladecalcs.R2(K2, M2, N)) + "\n")
-        file.write("r2_O_M2 " + str(cladecalcs.R2(O, M2, N)) + "\n")
-        if len(M3) == 0:
-            file.write("r2_S_M3 NA\n")
-            file.write("r2_K1_M3 NA\n")
-            file.write("r2_K2_M3 NA\n")
-            file.write("r2_O_M3 NA\n")
-        else:
-            file.write("r2_S_M3 " + str(cladecalcs.R2(S, M3, N)) + "\n")
-            file.write("r2_K1_M3 " + str(cladecalcs.R2(K1, M3, N)) + "\n")
-            file.write("r2_K2_M3 " + str(cladecalcs.R2(K2, M3, N)) + "\n")
-            file.write("r2_O_M3 " + str(cladecalcs.R2(O, M3, N)) + "\n")
-        for j, (ts, clades, results, xx, ch, pos, searchrange) in enumerate(L):
-            for i in range(4):
-                file.write(
-                    "purple_bp_ch"
-                    + str(j)
-                    + "_"
-                    + labels[i]
-                    + " "
-                    + str(ff_list[(i, j)])
-                    + "\n"
-                )
-                file.write(
-                    "purple_prop_ch"
-                    + str(j)
-                    + "_"
-                    + labels[i]
-                    + " "
-                    + str(ff_list[(i, j)] / (searchrange[1] - searchrange[0] + 1))
-                    + "\n"
-                )
-            file.write("purple_bp_ch" + str(j) + " " + str(coverage[j]) + "\n")
-            file.write("purple_prop_ch" + str(j) + " " + str(coverage_p[j]) + "\n")
-            file.write(
-                "searchrange_bp_ch"
-                + str(j)
-                + " "
-                + str(searchrange[1] - searchrange[0] + 1)
-                + "\n"
-            )
-        if chrA == chrB:
-            for i in range(4):
-                file.write("purple_bp_ch1_" + labels[i] + " NA\n")
-                file.write("purple_prop_ch1_" + labels[i] + " NA\n")
-            file.write("purple_bp_ch1  NA\n")
-            file.write("purple_prop_ch1 NA\n")
-            file.write("searchrange_bp_ch1 NA\n")
-        for i in range(4):
-            file.write("blue_n_" + labels[i] + " " + str(len(cladesR[i])) + "\n")
-            supported = 0
-            for start, end, n, nm in cladesR[i]:
-                if nm > 0:
-                    supported += 1
-            file.write("blue_n_" + labels[i] + "_supported " + str(supported) + "\n")
-            file.write("SNPs_n_" + labels[i] + " " + str(len(mutsR[i])) + "\n")
-        for i in range(4):
-            file.write("max_clade_LHS_" + labels[i] + " " + str(R_clade_max[i]) + "\n")
-            file.write("max_clade_r2_" + labels[i] + " " + str(r2_clade_max[i]) + "\n")
-            file.write("max_SNP_LHS_" + labels[i] + " " + str(R_mut_max[i]) + "\n")
-            file.write("max_SNP_r2_" + labels[i] + " " + str(r2_mut_max[i]) + "\n")
-            file.write("max_SNP_chr_" + labels[i] + " " + R_mut_max_chr[i] + "\n")
-            file.write("max_SNP_pos_" + labels[i] + " " + R_mut_max_pos[i] + "\n")
-
-    print("="*100)
+    # # ===========================================================================================
+    # # Output info into .csv file
+    # # ===========================================================================================
+    #
+    # print("Writing output to file...")
+    #
+    # if chrC == -1:
+    #     chrC = "NA"
+    #     posC = "NA"
+    # coverage = ["NA", "NA"]
+    # coverage_p = ["NA", "NA"]
+    # for j, (ts, clades, results, xx, ch, pos, searchrange) in enumerate(L):
+    #     cc = 0
+    #     for k in range(len(xx[0])):
+    #         if min(xx[i][k] for i in range(4)) == 0:
+    #             cc += 1
+    #     coverage[j] = cc
+    #     coverage_p[j] = cc / (searchrange[1] - searchrange[0] + 1)
+    #
+    # with open(outname + ".txt", "w") as file:
+    #     # for j in range(4):
+    #     #     file.write("r2_threshold_" + labels[j] + " " + str(r_thresh) + "\n")
+    #     file.write("b " + str(b_est) + "\n")
+    #     file.write("h2 " + str(h2_est) + "\n")
+    #     file.write("alpha " + str(alpha) + "\n")
+    #     file.write("n " + str(n_reg) + "\n")
+    #     file.write("F " + str(RHS) + "\n")
+    #     file.write("F_SNP3 " + str(maxFM3) + "\n")
+    #     file.write("F_interaction " + str(FS) + "\n")
+    #     file.write("SNP1_chr " + str(chrA) + "\n")
+    #     file.write("SNP1_pos " + str(posA) + "\n")
+    #     file.write("SNP1_freq " + str(len(M1) / N) + "\n")
+    #     file.write("SNP2_chr " + str(chrB) + "\n")
+    #     file.write("SNP2_pos " + str(posB) + "\n")
+    #     file.write("SNP2_freq " + str(len(M2) / N) + "\n")
+    #     file.write("SNP1_SNP2_dist_bp " + str(dist_bp) + "\n")
+    #     file.write("SNP1_SNP2_dist_cM " + str(dist_cM) + "\n")
+    #     file.write("SNP3_chr " + str(chrC) + "\n")
+    #     file.write("SNP3_pos " + str(posC) + "\n")
+    #     if len(M3) != 0:
+    #         file.write("SNP3_freq " + str(len(M3) / N) + "\n")
+    #     else:
+    #         file.write("SNP3_freq NA\n")
+    #     file.write("S_freq " + str(len(S) / N) + "\n")
+    #     file.write("K1_freq " + str(len(K1) / N) + "\n")
+    #     file.write("K2_freq " + str(len(K2) / N) + "\n")
+    #     file.write("O_freq " + str(len(O) / N) + "\n")
+    #     file.write("r2_M1_M2 " + str(cladecalcs.R2(M1, M2, N)) + "\n")
+    #     file.write("r2_S_M1 " + str(cladecalcs.R2(S, M1, N)) + "\n")
+    #     file.write("r2_K1_M1 " + str(cladecalcs.R2(K1, M1, N)) + "\n")
+    #     file.write("r2_K2_M1 " + str(cladecalcs.R2(K2, M1, N)) + "\n")
+    #     file.write("r2_O_M1 " + str(cladecalcs.R2(O, M1, N)) + "\n")
+    #     file.write("r2_S_M2 " + str(cladecalcs.R2(S, M2, N)) + "\n")
+    #     file.write("r2_K1_M2 " + str(cladecalcs.R2(K1, M2, N)) + "\n")
+    #     file.write("r2_K2_M2 " + str(cladecalcs.R2(K2, M2, N)) + "\n")
+    #     file.write("r2_O_M2 " + str(cladecalcs.R2(O, M2, N)) + "\n")
+    #     if len(M3) == 0:
+    #         file.write("r2_S_M3 NA\n")
+    #         file.write("r2_K1_M3 NA\n")
+    #         file.write("r2_K2_M3 NA\n")
+    #         file.write("r2_O_M3 NA\n")
+    #     else:
+    #         file.write("r2_S_M3 " + str(cladecalcs.R2(S, M3, N)) + "\n")
+    #         file.write("r2_K1_M3 " + str(cladecalcs.R2(K1, M3, N)) + "\n")
+    #         file.write("r2_K2_M3 " + str(cladecalcs.R2(K2, M3, N)) + "\n")
+    #         file.write("r2_O_M3 " + str(cladecalcs.R2(O, M3, N)) + "\n")
+    #     for j, (ts, clades, results, xx, ch, pos, searchrange) in enumerate(L):
+    #         for i in range(4):
+    #             file.write(
+    #                 "purple_bp_ch"
+    #                 + str(j)
+    #                 + "_"
+    #                 + labels[i]
+    #                 + " "
+    #                 + str(ff_list[(i, j)])
+    #                 + "\n"
+    #             )
+    #             file.write(
+    #                 "purple_prop_ch"
+    #                 + str(j)
+    #                 + "_"
+    #                 + labels[i]
+    #                 + " "
+    #                 + str(ff_list[(i, j)] / (searchrange[1] - searchrange[0] + 1))
+    #                 + "\n"
+    #             )
+    #         file.write("purple_bp_ch" + str(j) + " " + str(coverage[j]) + "\n")
+    #         file.write("purple_prop_ch" + str(j) + " " + str(coverage_p[j]) + "\n")
+    #         file.write(
+    #             "searchrange_bp_ch"
+    #             + str(j)
+    #             + " "
+    #             + str(searchrange[1] - searchrange[0] + 1)
+    #             + "\n"
+    #         )
+    #     if chrA == chrB:
+    #         for i in range(4):
+    #             file.write("purple_bp_ch1_" + labels[i] + " NA\n")
+    #             file.write("purple_prop_ch1_" + labels[i] + " NA\n")
+    #         file.write("purple_bp_ch1  NA\n")
+    #         file.write("purple_prop_ch1 NA\n")
+    #         file.write("searchrange_bp_ch1 NA\n")
+    #     for i in range(4):
+    #         file.write("blue_n_" + labels[i] + " " + str(len(cladesR[i])) + "\n")
+    #         supported = 0
+    #         for start, end, n, nm in cladesR[i]:
+    #             if nm > 0:
+    #                 supported += 1
+    #         file.write("blue_n_" + labels[i] + "_supported " + str(supported) + "\n")
+    #         file.write("SNPs_n_" + labels[i] + " " + str(len(mutsR[i])) + "\n")
+    #     for i in range(4):
+    #         file.write("max_clade_LHS_" + labels[i] + " " + str(R_clade_max[i]) + "\n")
+    #         file.write("max_clade_r2_" + labels[i] + " " + str(r2_clade_max[i]) + "\n")
+    #         file.write("max_SNP_LHS_" + labels[i] + " " + str(R_mut_max[i]) + "\n")
+    #         file.write("max_SNP_r2_" + labels[i] + " " + str(r2_mut_max[i]) + "\n")
+    #         file.write("max_SNP_chr_" + labels[i] + " " + R_mut_max_chr[i] + "\n")
+    #         file.write("max_SNP_pos_" + labels[i] + " " + R_mut_max_pos[i] + "\n")
+    #
+    # print("="*100)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
