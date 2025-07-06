@@ -366,7 +366,7 @@ def main(argv):
 
     print("Setting up...")
     if chrA == chrB:
-        xxA = np.full((4, searchrangeA[1] - searchrangeA[0] + 1), np.inf)
+        xxA = np.full(searchrangeA[1] - searchrangeA[0] + 1, np.inf)
         L = [(ts1, clades1, xxA, chrA, posA, searchrangeA)]
         dist_bp = posB - posA
         if posA > rec_mapA.sequence_length or posB > rec_mapA.sequence_length:
@@ -376,8 +376,8 @@ def main(argv):
                 (rec_mapA.get_cumulative_mass(posB) - rec_mapA.get_cumulative_mass(posA)) * 100
             )
     else:
-        xxA = np.full((4, searchrangeA[1] - searchrangeA[0] + 1), np.inf)
-        xxB = np.full((4, searchrangeB[1] - searchrangeB[0] + 1), np.inf)
+        xxA = np.full(searchrangeA[1] - searchrangeA[0] + 1, np.inf)
+        xxB = np.full(searchrangeB[1] - searchrangeB[0] + 1, np.inf)
         L = [
             (ts1, clades1, xxA, chrA, posA, searchrangeA),
             (ts2, clades2, xxB, chrB, posB, searchrangeB),
@@ -386,12 +386,12 @@ def main(argv):
         dist_cM = "NA"
 
     print("="*100)
-    b_clade_min = [np.inf] * 4  # Lowest b for each clade
-    r2_clade_min = [0] * 4  # corresponding r^2
-    b_mut_min = [np.inf] * 4  # Lowest b for each SNP
-    b_mut_min_pos = ["NA"] * 4
-    b_mut_min_chr = ["NA"] * 4
-    r2_mut_min = [0] * 4  # corresponding r^2
+    b_clade_min = np.inf # Lowest b for each clade
+    r2_clade_min = 0 # corresponding r^2
+    b_mut_min = np.inf  # Lowest b for each SNP
+    b_mut_min_pos = "NA"
+    b_mut_min_chr = "NA"
+    r2_mut_min = 0  # corresponding r^2
 
     for ts, clades, xx, ch, pos, searchrange in L:
         print("Search range:", searchrange, searchrange[1] - searchrange[0] + 1)
@@ -417,26 +417,23 @@ def main(argv):
                         r[j] = cladecalcs.R2(X, Y, N)
                     for j in range(4):
                         if b_est[j] == np.min(b_est):
-                            if b_est[j] < b_clade_min[j] or (b_est[j] == b_clade_min[j] and r[j] > r2_clade_min[j]):
-                                # Just update the lowest observed b_est
-                                b_clade_min[j] = b_est[j]
-                                r2_clade_min[j] = r[j]
-                            if b_est[j] == b_clade_min[j] and r[j] > r2_clade_min[j]:
-                                r2_clade_min[j] = r[j]
-                            if (b_est[j] < b_clade_min[j] or (b_est[j] == b_clade_min[j] and r[j] > r2_clade_min[j])) and clades.num_mutations[i] > 0:
-                                b_mut_min[j] = b_est[j]
-                                b_mut_min_pos[j] = ",".join(
-                                    str(int(m)) for m in clades.mutations[i]
-                                )
-                                b_mut_min_chr[j] = str(ch)
-                                r2_mut_min[j] = r[j]
+                            if b_est[j] < b_clade_min or (b_est[j] == b_clade_min and r[j] > r2_clade_min):
+                                b_clade_min = b_est[j]
+                                r2_clade_min = r[j]
+                                if clades.num_mutations[i] > 0:
+                                    b_mut_min = b_est[j]
+                                    b_mut_min_pos = ",".join(
+                                        str(int(m)) for m in clades.mutations[i]
+                                    )
+                                    b_mut_min_chr = str(ch)
+                                    r2_mut_min = r[j]
                 pbar.update(1)
 
     print("-" * 100)
-    print("Best clade r^2 with a target set:", round(np.max(r2_clade_min), 2))
-    print("Best clade minimal effect size (b):", round(np.min(b_clade_min), 2))
-    print("Best SNP r^2 with a target set:", round(np.max(r2_mut_min), 2))
-    print("Best SNP minimal effect size (b):", round(np.min(b_mut_min), 2))
+    print("Best clade r^2 with a target set:", round(r2_clade_min, 2))
+    print("Best clade minimal effect size (b):", round(b_clade_min, 2))
+    print("Best SNP r^2 with a target set:", round(r2_mut_min, 2))
+    print("Best SNP minimal effect size (b):", round(b_mut_min, 2))
 
     pseudo_inverses = []
     target_configs = [
@@ -475,7 +472,7 @@ def main(argv):
 
                         # Update the results array with the vectorized operation
                         if bmin != np.inf:
-                            xx[j, start_idx:end_idx] = np.minimum(xx[j, start_idx:end_idx], bmin)
+                            xx[start_idx:end_idx] = np.minimum(xx[start_idx:end_idx], bmin)
 
                 pbar.update(1)
 
@@ -517,7 +514,7 @@ def main(argv):
             fig, axs = plt.subplots(4, 2, figsize=(9, 8), squeeze=False)
 
         for j, (ts, clades, xx, ch, pos, searchrange) in enumerate(L):
-            yy = [0, 0, 0, 0] 
+            yy = [0, 0, 0, 0]
             xplot = np.array([m for m in range(searchrange[0], searchrange[1] + 1)])
 
             # plot everything
