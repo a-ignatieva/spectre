@@ -9,7 +9,8 @@ import tskit
 import tszip
 from scipy.stats import norm
 from scipy.optimize import brentq
-import statsmodels.api as sm
+
+_sqrt2 = math.sqrt(2)
 
 class Clades:
     """
@@ -138,127 +139,137 @@ class Clades:
         self.end[i] = end
         self.span[i] = self.end[i] - self.start[i]
 
-def clade_span(ts_list, num_trees, num_samples, write_to_file=None, write_to_file_freq=None):
+def clade_span(
+    ts_list,
+    num_trees,
+    num_samples,
+    start=0,
+    end=math.inf,
+    write_to_file=None,
+    write_to_file_freq=None,
+):
     """
     Compute the span of clades in a given tree sequence.
     This is defined by the samples subtending a clade staying the same.
     :param ts_list: list of tskit tree sequence file handles with extensions (will be loaded as we go)
     :param num_trees: total number of trees in full ts (excluding the empty trees)
     :param num_samples: number of samples in each ts
+    :param start: start of region to compute
+    :param end: end of region to compute
     :param write_to_file: filename for outputting clades periodically
     :param write_to_file_freq: how often to output clades to file
     :return:
     """
-
     clades = Clades(None, size=int(num_trees * (num_samples - 2) / 2))
     closed_clades = []
     tree_counter = -1
-    left = 0.0
+
     if write_to_file is not None:
         with gzip.open(write_to_file + ".clades.gz", "wt") as file:
             file.write("NUM_CLADES 0\n")
             file.write("SEQUENCE_LENGTH None\n")
 
-    with tqdm.tqdm(total=num_trees, desc="Computing clade spans",
-                   bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}') as pbar:
+    with tqdm.tqdm(
+        total=num_trees,
+        desc="Computing clade spans",
+        bar_format="{l_bar}{bar:10}{r_bar}{bar:-10b}",
+    ) as pbar:
         for i, ts_handle in enumerate(ts_list):
             if os.path.exists(ts_handle + ".tsz"):
                 ts = tszip.decompress(ts_handle + ".tsz")
+            elif ts_handle[-3:] == "tsz":
+                ts = tszip.decompress(ts_handle)
             else:
                 ts = tskit.load(ts_handle)
             if i == len(ts_list) - 1:
                 clades.sequence_length = ts.sequence_length
 
             for t in ts.trees():
-                if (
-                    t.num_roots == 1
-                ):  # Sometimes first tree in ts out of stdpopsim is empty so skip it
+                if t.num_roots == 1:
                     tree_counter += 1
-                    left = max(left, t.interval[0])  # This is for having multiple Relate ts parts
-                    bitset = {}  # record node IDs as an array
-                    bitset_ = set()  # record node IDs as a string
-                    prevclades = list(clades.active_clades.values())  # clades in previous tree
-                    tree_muts = defaultdict(set)
+                    tree_interval_start = t.interval[0]
 
-                    # Dictionary of {node_tskit_id : set(mutation_positions)}
-                    for mut in t.mutations():
-                        tree_muts[mut.node].add(ts.site(mut.site).position)
+                    # Cap start and end points at the region boundaries
+                    clade_start_pos = max(tree_interval_start, start)
+                    clade_end_pos = min(tree_interval_start, end)
 
-                    for g in t.nodes(order='timeasc'):
-                        if g != t.root:
-                            if t.is_sample(g):
-                                # Just record the bitset
-                                g_id = 1 << g
-                                bitset[g] = g_id
-                            else:
-                                m = tree_muts[g]  # Set of mutation positions above this node in this tree
-                                g_id = 0
-                                for ch in t.children(g):
-                                    g_id = g_id | bitset[ch]
-                                cladesize = g_id.bit_count()
-                                bitset[g] = g_id
-                                if t.num_samples(g) != cladesize:
-                                    sys.exit("Error: clade size per genotype ID does not match tree.")
+                    # Only do processing if the tree overlaps the region
+                    if t.interval[0] < end and t.interval[1] > start:
+                        bitset = {}
+                        prevclades = list(clades.active_clades.values())
+                        tree_muts = defaultdict(set)
 
-                                if g_id in clades.active_clades:
-                                    # The clade was there in the previous tree, so record mutations and
-                                    # remove from prevclades (so prevclades will become the list of
-                                    # clades that have disappeared).
-                                    p = clades.active_clades[g_id]
-                                    clades.add_mutations(p, m)
-                                    if p in prevclades:
-                                        prevclades.remove(p)
-                                    # Add number of mutations above g to clade mutation count
+                        for mut in t.mutations():
+                            tree_muts[mut.node].add(ts.site(mut.site).position)
+
+                        for g in t.nodes(order="timeasc"):
+                            if g != t.root:
+                                if t.is_sample(g):
+                                    bitset[g] = 1 << g
                                 else:
-                                    # This is a new clade
-                                    # (this will be recorded as active when added)
-                                    if g_id is None:
-                                        sys.exit("Error: binid is None")
-                                    p = clades.add_clade(
-                                        binid=g_id,  # this is number or string
-                                        nodeid=g,
-                                        chunkindex=i,
-                                        treeindex=t.index,
-                                        cladesize=cladesize,
-                                        start=left,
-                                    )
-                                    clades.add_mutations(p, m)
-                    for p in prevclades:
-                        # These clades have disappeared
-                        clades.set_span(p, left)
-                        closed_clades.append(p)
+                                    m = tree_muts[g]
+                                    g_id = 0
+                                    for ch in t.children(g):
+                                        g_id = g_id | bitset[ch]
+                                    cladesize = g_id.bit_count()
+                                    bitset[g] = g_id
+                                    if t.num_samples(g) != cladesize:
+                                        sys.exit("Error: clade size does not match tree.")
 
-                    clades.active_clades = {
-                        key: val
-                        for key, val in clades.active_clades.items()
-                        if val not in prevclades
-                    }
+                                    if g_id in clades.active_clades:
+                                        p = clades.active_clades[g_id]
+                                        clades.add_mutations(p, m)
+                                        if p in prevclades:
+                                            prevclades.remove(p)
+                                    else:
+                                        p = clades.add_clade(
+                                            binid=g_id, nodeid=g, chunkindex=i,
+                                            treeindex=t.index, cladesize=cladesize,
+                                            start=clade_start_pos,
+                                        )
+                                        clades.add_mutations(p, m)
 
-                    if i == len(ts_list) - 1 and t.index == ts.num_trees - 1:
-                        clades.close(t.interval[1], closed_clades)
-                        if write_to_file is not None:
-                            clades.write_to_file(write_to_file, closed_clades)
-                            clades.fix_numbering(write_to_file)
-                        pbar.update(1)
-                        break
+                        for p in prevclades:
+                            clades.set_span(p, clade_end_pos)
+                            closed_clades.append(p)
 
-                    if write_to_file is not None:
-                        if len(closed_clades) >= write_to_file_freq:
-                            clades.write_to_file(write_to_file, closed_clades)
-                            for d in closed_clades:
-                                if clades.binid[d] is None:
-                                    sys.exit("binid is already None")
-                                del clades.mutations[d]
-                                clades.binid[d] = None
-                            closed_clades = []
+                        clades.active_clades = {
+                            key: val for key, val in clades.active_clades.items()
+                            if val not in prevclades
+                        }
 
-                    pbar.update(1)
+                if write_to_file is not None and write_to_file_freq is not None:
+                    if len(closed_clades) >= write_to_file_freq:
+                        clades.write_to_file(write_to_file, closed_clades)
+                        # Clear memory for clades that have been written
+                        for d in closed_clades:
+                            del clades.mutations[d]
+                            clades.binid[d] = None
+                        closed_clades = []
+
+                pbar.update(1)
+
+    final_end_pos = min(getattr(clades, 'sequence_length', end), end)
+    remaining_clades = list(clades.active_clades.keys())
+    for binid in remaining_clades:
+        clade_index = clades.active_clades[binid]
+        clades.set_span(clade_index, final_end_pos)
+        closed_clades.append(clade_index)
+
+    # Close remaining active clades and write any unwritten closed clades to file
+    if write_to_file is not None:
+        clades.write_to_file(write_to_file, closed_clades)
+        clades.close(final_end_pos, []) # Pass empty list as they've just been written
+        clades.fix_numbering(write_to_file)
+    else:
+        clades.close(final_end_pos, closed_clades)
 
     print("Done, traversed", tree_counter + 1, "trees, out of", num_trees)
     if write_to_file is not None:
         clades = None
 
     return clades
+
 
 def read_from_file(filehandle, p1=0, p2=math.inf):
     """
@@ -343,12 +354,32 @@ def R2(set1, set2, NN):
     s = len(set1 & set2)
     s1 = len(set1)
     s2 = len(set2)
+
+    if s1 == 0 or s2 == 0 or s1 == NN or s2 == NN:
+        return 0.0
+
     return (s*NN - s1*s2)**2 / (s1*s2*(NN-s1)*(NN-s2))
 
 
-def solve_for_b(P, C, beta_partial):
+def check_clade_probability(P, C, beta_partial, beta_s_sd, maxeffectsize):
+    # We set b = maxeffectsize (as a very high threshold) and check if resulting P is greater than the input P
+    # If not, there is no sense testing this clade because b would have to be greater than maxeffectsize
+    # (which is implausibly high)
+    term = maxeffectsize * beta_partial / beta_s_sd
+    calculated_prob = fast_norm_cdf(- C - term) + (1 - fast_norm_cdf(C - term))
+    # term_ = 1 * beta_partial
+    # calculated_prob_ = norm.cdf(- C - term_) + (1 - norm.cdf(C - term_))
+    # print("check clade:", P, maxeffectsize, beta_partial, calculated_prob, calculated_prob_)
+    return calculated_prob > P
+
+def fast_norm_cdf(x):
+    """A fast approximation of the normal CDF using math.erf."""
+    return 0.5 * (1 + math.erf(x / _sqrt2))
+
+def solve_for_b(P, C, beta_partial, beta_s_sd, maxeffectsize):
     """
     Numerically solves for the effect size b from equation (S9).
+    If resulting b > 1 this will return np.inf
     :param P: probability P
     :param C: significance threshold from the original test (e.g., 1.96 for alpha=0.05)
     :param beta_partial: estimated partial regression coefficient (beta_{z,s|x})
@@ -357,18 +388,30 @@ def solve_for_b(P, C, beta_partial):
     def equation_to_solve(b_abs):
         # We assume b_abs is positive and use beta_partial's sign
         # to determine the direction of the effect.
-        term = b_abs * beta_partial
-        calculated_prob = (norm.cdf(-C + term) + (1 - norm.cdf(C + term)))
+        term = b_abs * beta_partial / beta_s_sd
+        calculated_prob = fast_norm_cdf(- C - term) + (1 - fast_norm_cdf(C - term))
         return calculated_prob - P
 
-    try:
-        # Use a numerical solver (Brent's method) to find the root.
-        # We search for a solution for b in the interval [0, 5].
-        # The solver will find the positive root for b.
-        solution_b = brentq(equation_to_solve, a=0, b=5)
-        return solution_b
-    except ValueError:
-        return np.nan
+    b = np.inf
+    cont = True
+
+    if check_clade_probability(P, C, beta_partial, beta_s_sd, maxeffectsize):
+        try:
+            # Use a numerical solver (Brent's method) to find the root.
+            # We search for a solution for b in the interval [0, maxeffectsize + 10].
+            # The solver will find the positive root for b.
+            b = brentq(equation_to_solve, a=0, b=maxeffectsize + 10)
+            # print("solve for b:", P, b, equation_to_solve(b))
+        except ValueError:
+            return np.inf, cont
+    else:
+        cont = False
+
+    return b, cont
+
+
+def solve_for_b_part2(teststat, D, beta_partial, beta_s_sd, maxeffectsize):
+    return min(maxeffectsize, abs((abs(teststat) - D) * beta_s_sd / beta_partial))
 
 
 def set_to_vector(A, n_total_samples):
@@ -381,167 +424,100 @@ def set_to_vector(A, n_total_samples):
     return A_vec
 
 
-def sets_to_vectors(Z, S, X1, X2, n_total_samples):
-    """
-    Converts sets of sample indices into binary genotype vectors.
-    """
-    z_vec = set_to_vector(Z, n_total_samples)
-    s_vec = set_to_vector(S, n_total_samples)
-    x1_vec = set_to_vector(X1, n_total_samples)
-    x2_vec = set_to_vector(X2, n_total_samples)
-
-    return z_vec, s_vec, x1_vec, x2_vec
-
-
 def standardize(variable):
     """Converts a variable to have a mean of 0 and a standard deviation of 1."""
-    return (variable - np.mean(variable)) / np.std(variable, ddof=1)
+    s = np.std(variable, ddof=1)
+    if s == 0:
+        return np.zeros_like(variable)
+    else:
+        return (variable - np.mean(variable)) / s
 
 
-def estimate_beta_partial(z, s, x1, x2):
+def standardize_tensor(tensor, axis=None):
     """
-    Estimates the standardized partial regression coefficient of s on z,
-    conditional on x1 and x2.
-    """
-    z_std, s_std, x1_std, x2_std = map(standardize, [z, s, x1, x2])
-    X = np.column_stack((x1_std, x2_std, s_std))
-    model = sm.OLS(z_std, X)
-    results = model.fit()
-    # The coefficient for 's' is the last one in the parameter list
-    beta_hat = results.params[-1]
-    return beta_hat
-
-
-# def check_conditions(S, A, notA, M1, M2, N, P, C):
-#     """
-#     Check whether A provides evidence against existence of a clade Z such that
-#     significance inequality is satisfied
-#     :param S: samples in S
-#     :param A: samples in A
-#     :param M1: samples carrying SNP1
-#     :param M2: samples carrying SNP2
-#     :param N: total sample size
-#     :return:
-#     """
-#     S_vec, A_vec, M1_vec, M2_vec = sets_to_vectors(S, A, M1, M2, N)
-#
-#     Z1 = A & S
-#     Z2 = notA & S
-#     Z3 = A | S
-#     Z4 = A - S
-#     Z5 = notA - S
-#     Z6 = A & Z5
-#
-#     b_min = math.inf
-#
-#     for Z in [Z1, Z2, Z3, Z4, Z5, Z6]:
-#         Z_vec = set_to_vector(Z, N)
-#         beta = estimate_beta_partial(Z_vec, S_vec, M1_vec, M2_vec)
-#         b = solve_for_b(P, C, beta)
-#         if b < b_min:
-#             b_min = b
-#
-#     return b_min
-
-
-def check_conditions_fast(Y, notY, X, N, P, C, pseudo_inverse):
-    """
-    A much faster version of check_conditions that uses a pre-calculated
-    pseudo-inverse of the design matrix to avoid repeated regressions.
+    Standardizes a NumPy tensor along a specified axis.
 
     Args:
-        Y (set): The set of samples for the clade.
-        X (set): The set of samples for the target (e.g. S, K1, K2, O).
-        N (int): Total sample size.
-        P (float): Target probability for solve_for_b.
-        C (float): Significance threshold for solve_for_b.
-        pseudo_inverse (np.array): The pre-calculated pseudo-inverse of the standardized design matrix.
+        tensor (np.ndarray): The input NumPy array to be standardized.
+        axis (int, optional): The axis along which to perform the standardization.
+                              If None, the tensor is flattened before standardization.
+                              Defaults to None.
 
     Returns:
-        float: The minimum 'b' value.
+        np.ndarray: The standardized tensor with the same shape as the input.
     """
-    # Define the 6 Z sets based on the clade (Y) and the target (X)
-    Z_sets = [
-        Y & X,
-        notY & X,
-        Y | X,
-        Y - X,
-        notY - X,
-        Y | (notY - X),
-    ]
+    mean = np.mean(tensor, axis=axis, keepdims=True)
+    std = np.std(tensor, axis=axis, keepdims=True)
+    std[std == 0] = 1
 
-    b_min = np.inf
-
-    # Convert all 6 Z sets to standardized vectors
-    z_vectors_std = [standardize(set_to_vector(z_set, N)) for z_set in Z_sets]
-
-    for z_std in z_vectors_std:
-        beta_coeffs = pseudo_inverse @ z_std
-        beta_partial = beta_coeffs[-1]
-        b = solve_for_b(P, C, beta_partial)
-        if b < b_min:
-            b_min = b
-
-    return b_min
+    return (tensor - mean) / std
 
 
-# def calculate_all_bmins_for_clade(Y, M1, M2, S, K1, K2, O, N, P, C):
-#     """
-#     Calculates the minimum effect size 'b' for a given clade Y across all
-#     four target sets (S, K1, K2, O).
-#
-#     This function consolidates the loops to be more efficient.
-#
-#     Returns:
-#         list: A list of four 'b_min' values, one for each target set.
-#     """
-#
-#     M1n = {s for s in range(N) if s not in M1}
-#     M2n = {s for s in range(N) if s not in M2}
-#     notY = {s for s in range(N) if (s not in Y)}
-#
-#     target_sets = [
-#         (S, M1, M2),  # Target S uses main effects M1, M2
-#         (K1, M1, M2n),  # Target K1 uses M1, not M2
-#         (K2, M1n, M2),  # Target K2 uses not M1, M2
-#         (O, M1n, M2n)  # Target O uses not M1, not M2
-#     ]
-#
-#     bmins = [np.inf] * 4
-#
-#     for i, (X, MM1, MM2) in enumerate(target_sets):
-#         bmin = check_conditions(X, Y, notY, MM1, MM2, N, P, C)
-#         bmins[i] = bmin
-#
-#     return bmins
+def run_all_tests(P_range, C, D, teststat, maxeffectsize, beta_s_sd, beta_partial_t1=None, beta_partials_t2=None):
+    """
+    Runs Test 1 and Test 2 on a clade in one go.
+    """
+    # --- Test 1 ---
+    bmin_test1 = [np.inf] * len(P_range)
+    # print("test 1")
+    for p, P in enumerate(P_range):
+        b, cont = solve_for_b(P, C, beta_partial_t1, beta_s_sd, maxeffectsize)
+        bmin_test1[p] = b
+        if not cont:
+            break
+
+    bmin_test1_part2 = np.inf
+    if teststat is not None:
+        bmin_test1_part2 = solve_for_b_part2(teststat, D, beta_partial_t1, beta_s_sd, maxeffectsize)
+
+    # --- Test 2 ---
+    if beta_partials_t2 is not None:
+        bmin_test2 = [bmin for bmin in bmin_test1]
+        for beta in beta_partials_t2:
+            if beta != 0:
+                for p, P in enumerate(P_range):
+                    b, cont = solve_for_b(P, C, beta, beta_s_sd, maxeffectsize)
+                    bmin_test2[p] = min(bmin_test2[p], b)
+                    if not cont:
+                        break
+    else:
+        bmin_test2 = [0] * len(P_range)
+
+    return bmin_test1, bmin_test1_part2, bmin_test2
 
 
 def get_searchrange(pos, rec_map, d=1.0):
     """
-    Output genomic positions (left, right) such that rec_map(right) - rec_map(left) == d
-    :param pos: position of SNP
-    :param rec_map: recombination map
-    :param d: distance in cM
-    :return:
+    More efficient version using a numerical solver.
     """
-    if pos > rec_map.sequence_length:
-        print("Cannot set searchrange, outside rec_map limits.")
-        return int(pos - 1000000), math.inf
-    P = rec_map.get_cumulative_mass(pos)
     sl = rec_map.sequence_length
-    S = [0, sl]
-    A = np.arange(max(0, pos - 15000000), pos - 1, step=100)
-    A = A[::-1]
-    B = np.arange(pos, min(pos + 15000000, sl - 1), step=100)
-    AA = rec_map.get_cumulative_mass(A)
-    BB = rec_map.get_cumulative_mass(B)
-    for i, (X, XX) in enumerate([(A, AA), (B, BB)]):
-        if max(abs(XX - P)) >= d/100:
-            for j, x in enumerate(X):
-                if abs(XX[j] - P) >= d/100:
-                    S[i] = x
-                    break
-    # print(S[0], pos - S[0], (P - rec_map.get_cumulative_mass(S[0]))*100)
-    # print(S[1], pos - S[1], (P - rec_map.get_cumulative_mass(S[1]))*100)
-    return int(S[0]), int(S[1])
+    target_cm_dist = d / 100.0
+    current_pos_cm = rec_map.get_cumulative_mass(pos)
+
+    # Define functions whose roots are the boundaries we seek
+    def left_boundary_func(x):
+        return current_pos_cm - rec_map.get_cumulative_mass(x) - target_cm_dist
+
+    def right_boundary_func(x):
+        return rec_map.get_cumulative_mass(x) - current_pos_cm - target_cm_dist
+
+    # Set reasonable search brackets (e.g., 20 Mbp)
+    search_bracket_bp = 20000000
+
+    left_bracket = max(0, pos - search_bracket_bp)
+    right_bracket = min(sl, pos + search_bracket_bp)
+
+    try:
+        # Solve for the left and right boundaries
+        left_bound = brentq(left_boundary_func, left_bracket, pos)
+    except ValueError:
+        # If no root is found, fall back to the bracket edge
+        left_bound = left_bracket
+
+    try:
+        right_bound = brentq(right_boundary_func, pos, right_bracket)
+    except ValueError:
+        right_bound = right_bracket
+
+    return int(left_bound), int(right_bound)
 
