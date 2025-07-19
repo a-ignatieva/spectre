@@ -1,5 +1,5 @@
 ### Spectre: Searching for Phantom EpistatiC interactions using TREes
-Citation: Ignatieva, A., and Ferreira, L.A.F. Phantom epistasis through the lens of genealogies. bioRxiv, doi.org/
+Citation: Ignatieva, A., and Ferreira, L.A.F. Phantom epistasis through the lens of genealogies. bioRxiv, doi.org/10.1101/2024.12.03.626630
 
 To run the script, first install the necessary packages
 
